@@ -313,22 +313,3 @@ func createKafkaMessage(msg *models.Message) kafka.Message {
 		Time:      msg.Timestamp,
 	}
 }
-
-// Stub types to simulate kafka-go types for testing
-// type kafkaMessageStub struct {
-// 	Topic     string
-// 	Partition int
-// 	Offset    int64
-// 	Key       []byte
-// 	Value     []byte
-// 	Headers   []kafkaHeader
-// 	Time      time.Time
-// }
-
-// type kafkaHeader struct {
-// 	Key   string
-// 	Value []byte
-// }
-
-// Note: In actual tests with kafka-go, you would import and use kafka.Message
-// These stubs demonstrate the testing approach
