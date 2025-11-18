@@ -1,64 +1,136 @@
 package main
 
 import (
-	pkg "go-message/pkg/kafka"
-	"log"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/google/uuid"
+	"go-message/internal/config"
+	"go-message/internal/kafka"
+	"go-message/internal/observability"
+	"go-message/pkg/models"
 )
 
 func main() {
-	msg := pkg.Message{
-		Key: uuid.NewString(),
-		Message: map[string]interface{}{
-			"event_type":  "order_created",
-			"timestamp":   "2025-11-07T10:30:45.123Z",
-			"order_id":    "ORD-2025-001234",
-			"customer_id": "CUST-567890",
-			"items": []interface{}{
-				map[string]interface{}{
-					"product_id": "PROD-111",
-					"name":       "iPhone 15 Pro",
-					"quantity":   1,
-					"price":      42900.00,
-				},
-				map[string]interface{}{
-					"product_id": "PROD-222",
-					"name":       "AirPods Pro",
-					"quantity":   1,
-					"price":      8990.00,
-				},
-			},
-			"total_amount": "51890.00",
-			"currency":     "THB",
-			"shipping_address": map[string]interface{}{
-				"province":    "Bangkok",
-				"district":    "Chatuchak",
-				"postal_code": "10900",
-			},
-			"payment_method": "credit_card",
-			"status":         "pending",
-		},
+	// Load configuration
+	cfg := config.Load()
+
+	// Initialize logger
+	observability.InitLogger(cfg.Logging.Level)
+	logger := observability.GetLogger()
+
+	logger.Info("Starting Kafka Producer")
+
+	// Initialize metrics
+	metrics := observability.NewInMemoryMetrics()
+
+	// Create Kafka client for health checks
+	client := kafka.NewKafkaClient(cfg.Kafka.Brokers, 5)
+
+	// Verify connectivity
+	ctx := context.Background()
+	if err := client.HealthCheck(ctx); err != nil {
+		logger.WithError(err).Fatal("Failed to connect to Kafka")
+	}
+	logger.Info("Successfully connected to Kafka")
+
+	// Create producer
+	producerCfg := kafka.ProducerConfig{
+		Brokers:     cfg.Kafka.Brokers,
+		Acks:        cfg.Producer.Acks,
+		Retries:     cfg.Producer.Retries,
+		Idempotent:  cfg.Producer.Idempotent,
+		MaxRetries:  cfg.Producer.Retries,
+		BaseBackoff: 100 * time.Millisecond,
+		Metrics:     metrics,
 	}
 
-	kp, err := pkg.OpenKafkaProducer(pkg.ProducerConfig{
-		Brokers: []string{"localhost:9092"},
-		Topic:   "Order",
-	})
-	if err != nil {
-		log.Fatal(err)
+	producer := kafka.NewProducer(producerCfg)
+	defer producer.Close()
+
+	// Setup graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		logger.Info("Received shutdown signal")
+		cancel()
+	}()
+
+	// Produce messages periodically
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	messageCount := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("Shutting down producer")
+
+			// Print metrics
+			logger.WithFields(map[string]interface{}{
+				"published": metrics.GetPublished(),
+				"failed":    metrics.GetPublishFailed(),
+			}).Info("Final metrics")
+
+			return
+
+		case <-ticker.C:
+			messageCount++
+
+			// Create sample message
+			data := map[string]interface{}{
+				"user_id":   messageCount,
+				"action":    "sample_event",
+				"timestamp": time.Now().Unix(),
+				"metadata": map[string]string{
+					"version": "1.0",
+					"source":  "producer-cli",
+				},
+			}
+
+			value, err := json.Marshal(data)
+			if err != nil {
+				logger.WithError(err).Error("Failed to marshal message")
+				continue
+			}
+
+			// Generate message ID for idempotency
+			messageID := fmt.Sprintf("msg-%d-%d", time.Now().UnixNano(), messageCount)
+
+			headers := map[string]string{
+				models.HeaderMessageID: messageID,
+				"producer":             "cli-producer",
+				"timestamp":            time.Now().Format(time.RFC3339),
+			}
+
+			// Publish message
+			key := fmt.Sprintf("user-%d", messageCount)
+			err = producer.Publish(ctx, cfg.Producer.Topic, key, value, headers)
+			if err != nil {
+				logger.WithError(err).Error("Failed to publish message")
+			} else {
+				logger.WithFields(map[string]interface{}{
+					"topic":      cfg.Producer.Topic,
+					"key":        key,
+					"message_id": messageID,
+				}).Info("Message published")
+			}
+
+			// Print current metrics
+			logger.WithFields(map[string]interface{}{
+				"published": metrics.GetPublished(),
+				"failed":    metrics.GetPublishFailed(),
+			}).Debug("Current metrics")
+		}
 	}
-	policy := pkg.RetryPolicy{
-		MaxRetries:     5,
-		InitialBackoff: time.Second,
-		MaxBackoff:     30 * time.Second,
-		BackoffFactor:  2.0,
-		Jitter:         true,
-	}
-	if err := kp.SendMessageWithRetry(msg, policy); err != nil {
-		log.Println(err.Error())
-	}
-	log.Println("Send message to kafka success.")
-	defer kp.CloseGracefully(5 * time.Second)
 }

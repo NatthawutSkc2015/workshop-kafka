@@ -1,0 +1,168 @@
+# Kafka Go Production-Ready Example
+
+## Project Structure
+
+```
+kafka-example/
+├── go.mod
+├── go.sum
+├── README.md
+├── cmd/
+│   ├── producer/
+│   │   └── main.go
+│   └── consumer/
+│       └── main.go
+├── internal/
+│   ├── config/
+│   │   └── config.go
+│   ├── kafka/
+│   │   ├── client.go
+│   │   ├── producer.go
+│   │   ├── producer_test.go
+│   │   ├── consumer.go
+│   │   ├── consumer_test.go
+│   │   └── mocks.go
+│   ├── service/
+│   │   ├── message_processor.go
+│   │   └── message_processor_test.go
+│   └── observability/
+│       ├── logger.go
+│       └── metrics.go
+└── pkg/
+    └── models/
+        └── message.go
+```
+
+## Environment Variables
+
+```bash
+# Kafka Connection
+KAFKA_BROKERS=localhost:9092,localhost:9093,localhost:9094
+
+# Producer Settings
+KAFKA_PRODUCER_TOPIC=events
+KAFKA_PRODUCER_ACKS=all
+KAFKA_PRODUCER_RETRIES=3
+KAFKA_PRODUCER_IDEMPOTENT=true
+
+# Consumer Settings
+KAFKA_CONSUMER_TOPIC=events
+KAFKA_CONSUMER_GROUP_ID=event-processor-group
+KAFKA_CONSUMER_WORKERS=5
+KAFKA_CONSUMER_RETRY_MAX=3
+KAFKA_CONSUMER_FETCH_MIN_BYTES=1024
+KAFKA_CONSUMER_FETCH_MAX_BYTES=10485760
+
+# Retry/DLQ Topics
+KAFKA_RETRY_TOPIC_PREFIX=events-retry
+KAFKA_DLQ_TOPIC=events-dlq
+
+# Logging
+LOG_LEVEL=info
+```
+
+## Running Locally
+
+### 1. Start Kafka (Docker Compose)
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+```
+
+Start with:
+```bash
+docker-compose up -d
+```
+
+### 2. Install Dependencies
+
+```bash
+go mod download
+```
+
+### 3. Run Tests
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with coverage
+go test ./... -cover
+
+# Run specific package tests
+go test ./internal/kafka/... -v
+```
+
+### 4. Run Producer
+
+```bash
+export KAFKA_BROKERS=localhost:9092
+export KAFKA_PRODUCER_TOPIC=events
+go run cmd/producer/main.go
+```
+
+### 5. Run Consumer
+
+```bash
+export KAFKA_BROKERS=localhost:9092
+export KAFKA_CONSUMER_TOPIC=events
+export KAFKA_CONSUMER_GROUP_ID=event-processor-group
+go run cmd/consumer/main.go
+```
+
+## Architecture Overview
+
+### Layers
+
+1. **Transport Layer** (`internal/kafka/`): Kafka client abstraction, connection management
+2. **Service Layer** (`internal/service/`): Business logic, message processing
+3. **Config Layer** (`internal/config/`): Configuration management
+4. **Observability** (`internal/observability/`): Logging and metrics
+
+### Key Features
+
+- **Connection Management**: Automatic reconnection with exponential backoff
+- **Producer**: Idempotent producer with configurable acks and retries
+- **Consumer**: Consumer group with manual offset commits and worker pool
+- **Retry Logic**: Failed messages → retry topics → DLQ
+- **Graceful Shutdown**: Context-based cancellation with proper cleanup
+- **Observability**: Structured logging and metric hooks
+- **Testing**: Comprehensive unit tests with mocks
+
+## Testing Strategy
+
+Tests are designed to be unit tests without external dependencies:
+
+1. **Mock Interfaces**: Kafka client interfaces are mocked for testing
+2. **Behavior Verification**: Tests verify retry logic, commit flows, and error handling
+3. **Concurrency Safety**: Tests verify proper goroutine cleanup
+4. **Integration Ready**: Code is structured to easily add integration tests
+
+## Dependencies
+
+- `github.com/segmentio/kafka-go`: Kafka client library
+- `github.com/sirupsen/logrus`: Structured logging
+- `github.com/stretchr/testify`: Testing utilities
