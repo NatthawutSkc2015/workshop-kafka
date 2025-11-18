@@ -34,4 +34,7 @@ Thumbs.db
 .env
 .env.local
 
+# Test
+coverage
+
 volumes
