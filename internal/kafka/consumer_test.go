@@ -57,7 +57,7 @@ func TestConsumer_ProcessMessage_Success(t *testing.T) {
 
 	// Process message (note: in real test, this would need Kafka reader mock)
 	ctx := context.Background()
-	consumer.processMessage(ctx, kafkaMsg, handler)
+	consumer.processMessage(ctx, kafkaMsg, handler, 0)
 
 	assert.True(t, handlerCalled)
 	assert.Equal(t, int64(1), metrics.GetProcessed())
@@ -103,7 +103,7 @@ func TestConsumer_ProcessMessage_RetryLogic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	consumer.processMessage(ctx, kafkaMsg, handler)
+	consumer.processMessage(ctx, kafkaMsg, handler, 0)
 
 	// Should send to retry topic
 	assert.Equal(t, int64(1), metrics.GetFailed())
@@ -153,7 +153,7 @@ func TestConsumer_ProcessMessage_SendToDLQ(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	consumer.processMessage(ctx, kafkaMsg, handler)
+	consumer.processMessage(ctx, kafkaMsg, handler, 0)
 
 	// Should send to DLQ
 	assert.Equal(t, int64(1), metrics.GetFailed())
@@ -205,7 +205,7 @@ func TestConsumer_ProcessMessage_Deduplication(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	consumer.processMessage(ctx, kafkaMsg, handler)
+	consumer.processMessage(ctx, kafkaMsg, handler, 0)
 
 	// Handler should not be called for duplicate
 	assert.False(t, handlerCalled)

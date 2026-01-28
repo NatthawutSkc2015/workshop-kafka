@@ -85,7 +85,7 @@ func main() {
 
 			// Print metrics
 			logger.Info("Final metrics",
-				zap.Any("", metrics.GetPublished()),
+				zap.Any("published", metrics.GetPublished()),
 				zap.Any("failed", metrics.GetPublishFailed()),
 			)
 

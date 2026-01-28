@@ -209,13 +209,13 @@ func (c *Consumer) worker(ctx context.Context, id int, msgChan <-chan kafka.Mess
 				return
 			}
 
-			c.processMessage(ctx, msg, handler)
+			c.processMessage(ctx, msg, handler, id)
 		}
 	}
 }
 
 // processMessage handles message processing with retry and DLQ logic
-func (c *Consumer) processMessage(ctx context.Context, kafkaMsg kafka.Message, handler MessageHandler) {
+func (c *Consumer) processMessage(ctx context.Context, kafkaMsg kafka.Message, handler MessageHandler, workderID int) {
 	// Convert to internal message format
 	msg := c.toInternalMessage(kafkaMsg)
 
@@ -224,6 +224,7 @@ func (c *Consumer) processMessage(ctx context.Context, kafkaMsg kafka.Message, h
 		zap.Any("partition", kafkaMsg.Partition),
 		zap.Any("offset", kafkaMsg.Offset),
 		zap.Any("message_id", msg.Headers[models.HeaderMessageID]),
+		zap.Any("worker_id", workderID),
 	)
 
 	// Check for duplicates using message ID
