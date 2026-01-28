@@ -10,6 +10,7 @@ import (
 )
 
 type Config struct {
+	Env      string
 	Kafka    KafkaConfig
 	Logging  LoggingConfig
 	Consumer ConsumerConfig

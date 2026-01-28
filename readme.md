@@ -118,29 +118,29 @@ Wait for Kafka to be ready (~30 seconds).
 
 ```bash
 # Create main topic
-docker exec -it kafka-example-kafka-1 kafka-topics \
+docker exec -it kafka /opt/kafka/bin/kafka-topics.sh \
   --create --topic events \
   --bootstrap-server localhost:9092 \
   --partitions 3 --replication-factor 1
 
 # Create retry topics
-docker exec -it kafka-example-kafka-1 kafka-topics \
+docker exec -it kafka /opt/kafka/bin/kafka-topics.sh \
   --create --topic events-retry-1 \
   --bootstrap-server localhost:9092 \
   --partitions 3 --replication-factor 1
 
-docker exec -it kafka-example-kafka-1 kafka-topics \
+docker exec -it kafka /opt/kafka/bin/kafka-topics.sh \
   --create --topic events-retry-2 \
   --bootstrap-server localhost:9092 \
   --partitions 3 --replication-factor 1
 
-docker exec -it kafka-example-kafka-1 kafka-topics \
+docker exec -it kafka /opt/kafka/bin/kafka-topics.sh \
   --create --topic events-retry-3 \
   --bootstrap-server localhost:9092 \
   --partitions 3 --replication-factor 1
 
 # Create DLQ topic
-docker exec -it kafka-example-kafka-1 kafka-topics \
+docker exec -it kafka /opt/kafka/bin/kafka-topics.sh \
   --create --topic events-dlq \
   --bootstrap-server localhost:9092 \
   --partitions 3 --replication-factor 1

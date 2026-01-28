@@ -9,7 +9,7 @@ import (
 	"go-message/internal/observability"
 
 	kafka "github.com/segmentio/kafka-go"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 // ProducerClient defines the interface for Kafka producer operations
@@ -21,7 +21,7 @@ type ProducerClient interface {
 // Producer implements ProducerClient with delivery guarantees and retry logic
 type Producer struct {
 	writer      *kafka.Writer
-	logger      *logrus.Logger
+	logger      *zap.Logger
 	metrics     observability.MetricsCollector
 	maxRetries  int
 	baseBackoff time.Duration
@@ -35,6 +35,7 @@ type ProducerConfig struct {
 	MaxRetries  int
 	BaseBackoff time.Duration
 	Metrics     observability.MetricsCollector
+	Logger      *zap.Logger
 }
 
 func NewProducer(cfg ProducerConfig) *Producer {
@@ -68,7 +69,7 @@ func NewProducer(cfg ProducerConfig) *Producer {
 
 	return &Producer{
 		writer:      writer,
-		logger:      observability.GetLogger(),
+		logger:      cfg.Logger,
 		metrics:     cfg.Metrics,
 		maxRetries:  cfg.MaxRetries,
 		baseBackoff: cfg.BaseBackoff,
@@ -105,12 +106,12 @@ func (p *Producer) Publish(ctx context.Context, topic, key string, value []byte,
 				float64(5*time.Second),
 			))
 
-			p.logger.WithFields(logrus.Fields{
-				"attempt": attempt,
-				"topic":   topic,
-				"key":     key,
-				"backoff": backoff,
-			}).Warn("Retrying message publish")
+			p.logger.Info("Retrying message publish",
+				zap.Any("attempt", attempt),
+				zap.Any("topic", topic),
+				zap.Any("key", key),
+				zap.Any("backoff", backoff),
+			)
 
 			select {
 			case <-ctx.Done():
@@ -122,21 +123,22 @@ func (p *Producer) Publish(ctx context.Context, topic, key string, value []byte,
 		err := p.writer.WriteMessages(ctx, msg)
 		if err == nil {
 			p.metrics.IncPublished()
-			p.logger.WithFields(logrus.Fields{
-				"topic":   topic,
-				"key":     key,
-				"attempt": attempt + 1,
-			}).Debug("Message published successfully")
+			p.logger.Info("Message published successfully",
+				zap.Any("topic", topic),
+				zap.Any("key", key),
+				zap.Any("attempt", attempt+1),
+			)
+
 			return nil
 		}
 
 		lastErr = err
-		p.logger.WithFields(logrus.Fields{
-			"topic":   topic,
-			"key":     key,
-			"attempt": attempt + 1,
-			"error":   err.Error(),
-		}).Warn("Failed to publish message")
+		p.logger.Info("Failed to publish message",
+			zap.Any("topic", topic),
+			zap.Any("key", key),
+			zap.Any("attempt", attempt+1),
+			zap.String("error", err.Error()),
+		)
 	}
 
 	p.metrics.IncPublishFailed()

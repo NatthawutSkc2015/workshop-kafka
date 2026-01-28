@@ -12,7 +12,7 @@ import (
 	"go-message/pkg/models"
 
 	kafka "github.com/segmentio/kafka-go"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 // MessageHandler processes consumed messages
@@ -28,7 +28,7 @@ type ConsumerClient interface {
 type Consumer struct {
 	reader           *kafka.Reader
 	producer         ProducerClient
-	logger           *logrus.Logger
+	logger           *zap.Logger
 	metrics          observability.MetricsCollector
 	workers          int
 	retryMax         int
@@ -50,6 +50,7 @@ type ConsumerConfig struct {
 	DLQTopic         string
 	Metrics          observability.MetricsCollector
 	DedupeStore      DedupeStore
+	Logger           *zap.Logger
 }
 
 // DedupeStore provides interface for message deduplication
@@ -128,7 +129,7 @@ func NewConsumer(cfg ConsumerConfig, producer ProducerClient) *Consumer {
 	return &Consumer{
 		reader:           reader,
 		producer:         producer,
-		logger:           observability.GetLogger(),
+		logger:           cfg.Logger,
 		metrics:          cfg.Metrics,
 		workers:          cfg.Workers,
 		retryMax:         cfg.RetryMax,
@@ -140,7 +141,7 @@ func NewConsumer(cfg ConsumerConfig, producer ProducerClient) *Consumer {
 
 // Start begins consuming messages with worker pool
 func (c *Consumer) Start(ctx context.Context, handler MessageHandler) error {
-	c.logger.WithField("workers", c.workers).Info("Starting consumer")
+	c.logger.Info("Starting consumer", zap.Any("workers", c.workers))
 
 	// Create worker pool
 	msgChan := make(chan kafka.Message, c.workers*2)
@@ -178,7 +179,7 @@ func (c *Consumer) fetcher(ctx context.Context, msgChan chan<- kafka.Message) {
 			if err == context.Canceled {
 				return
 			}
-			c.logger.WithError(err).Error("Failed to fetch message")
+			c.logger.Error("Failed to fetch message", zap.Error(err))
 			continue
 		}
 
@@ -195,18 +196,16 @@ func (c *Consumer) fetcher(ctx context.Context, msgChan chan<- kafka.Message) {
 // worker processes messages from the channel
 func (c *Consumer) worker(ctx context.Context, id int, msgChan <-chan kafka.Message, handler MessageHandler) {
 	defer c.wg.Done()
-
-	logger := c.logger.WithField("worker_id", id)
-	logger.Info("Worker started")
+	c.logger.Info("Worker started", zap.Any("worker_id", id))
 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("Worker stopping due to context cancellation")
+			c.logger.Info("Worker stopping due to context cancellation")
 			return
 		case msg, ok := <-msgChan:
 			if !ok {
-				logger.Info("Worker stopping - channel closed")
+				c.logger.Info("Worker stopping - channel closed")
 				return
 			}
 
@@ -220,12 +219,12 @@ func (c *Consumer) processMessage(ctx context.Context, kafkaMsg kafka.Message, h
 	// Convert to internal message format
 	msg := c.toInternalMessage(kafkaMsg)
 
-	logger := c.logger.WithFields(logrus.Fields{
-		"topic":      kafkaMsg.Topic,
-		"partition":  kafkaMsg.Partition,
-		"offset":     kafkaMsg.Offset,
-		"message_id": msg.Headers[models.HeaderMessageID],
-	})
+	logger := c.logger.With(
+		zap.Any("topic", kafkaMsg.Topic),
+		zap.Any("partition", kafkaMsg.Partition),
+		zap.Any("offset", kafkaMsg.Offset),
+		zap.Any("message_id", msg.Headers[models.HeaderMessageID]),
+	)
 
 	// Check for duplicates using message ID
 	if msgID, ok := msg.Headers[models.HeaderMessageID]; ok {
@@ -256,7 +255,7 @@ func (c *Consumer) processMessage(ctx context.Context, kafkaMsg kafka.Message, h
 
 	// Processing failed
 	c.metrics.IncFailed()
-	logger.WithError(err).Warn("Message processing failed")
+	logger.Error("Message processing failed", zap.Error(err))
 
 	// Check if we should retry or send to DLQ
 	if retryCount < c.retryMax {
@@ -271,7 +270,7 @@ func (c *Consumer) processMessage(ctx context.Context, kafkaMsg kafka.Message, h
 // commitMessage commits the message offset
 func (c *Consumer) commitMessage(msg kafka.Message) {
 	if err := c.reader.CommitMessages(context.Background(), msg); err != nil {
-		c.logger.WithError(err).Error("Failed to commit message")
+		c.logger.Error("Failed to commit message", zap.Error(err))
 	}
 }
 
@@ -291,16 +290,16 @@ func (c *Consumer) sendToRetry(ctx context.Context, msg *models.Message, retryCo
 
 	err := c.producer.Publish(ctx, retryTopic, msg.Key, msg.Value, msg.Headers)
 	if err != nil {
-		c.logger.WithFields(logrus.Fields{
-			"topic":       retryTopic,
-			"retry_count": retryCount,
-			"error":       err.Error(),
-		}).Error("Failed to send message to retry topic")
+		c.logger.Error("Failed to send message to retry topic",
+			zap.Any("topic", retryTopic),
+			zap.Any("retry_count", retryCount),
+			zap.Any("error", err.Error()),
+		)
 	} else {
-		c.logger.WithFields(logrus.Fields{
-			"topic":       retryTopic,
-			"retry_count": retryCount,
-		}).Info("Message sent to retry topic")
+		c.logger.Error("Message sent to retry topic",
+			zap.Any("topic", retryTopic),
+			zap.Any("retry_count", retryCount),
+		)
 	}
 }
 
@@ -317,12 +316,12 @@ func (c *Consumer) sendToDLQ(ctx context.Context, msg *models.Message, failureEr
 
 	err := c.producer.Publish(ctx, c.dlqTopic, msg.Key, msg.Value, msg.Headers)
 	if err != nil {
-		c.logger.WithFields(logrus.Fields{
-			"topic": c.dlqTopic,
-			"error": err.Error(),
-		}).Error("Failed to send message to DLQ")
+		c.logger.Error("Failed to send message to DLQ",
+			zap.Any("topic", c.dlqTopic),
+			zap.Any("error", err.Error()),
+		)
 	} else {
-		c.logger.WithField("topic", c.dlqTopic).Info("Message sent to DLQ")
+		c.logger.Info("Message sent to DLQ", zap.Any("topic", c.dlqTopic))
 	}
 }
 

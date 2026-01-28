@@ -6,25 +6,23 @@ import (
 	"math"
 	"time"
 
-	"go-message/internal/observability"
-
 	kafka "github.com/segmentio/kafka-go"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 // KafkaClient manages Kafka connection with automatic reconnection
 type KafkaClient struct {
 	brokers     []string
-	logger      *logrus.Logger
+	logger      *zap.Logger
 	maxRetries  int
 	baseBackoff time.Duration
 	maxBackoff  time.Duration
 }
 
-func NewKafkaClient(brokers []string, maxRetries int) *KafkaClient {
+func NewKafkaClient(brokers []string, maxRetries int, logger *zap.Logger) *KafkaClient {
 	return &KafkaClient{
 		brokers:     brokers,
-		logger:      observability.GetLogger(),
+		logger:      logger,
 		maxRetries:  maxRetries,
 		baseBackoff: 1 * time.Second,
 		maxBackoff:  30 * time.Second,
@@ -60,9 +58,9 @@ func (c *KafkaClient) HealthCheckLoop(ctx context.Context, interval time.Duratio
 			return
 		case <-ticker.C:
 			if err := c.HealthCheck(ctx); err != nil {
-				c.logger.WithError(err).Warn("Health check failed, attempting reconnection")
+				c.logger.Error("Health check failed, attempting reconnection", zap.Error(err))
 				if err := c.reconnectWithBackoff(ctx, onReconnect); err != nil {
-					c.logger.WithError(err).Error("Reconnection failed")
+					c.logger.Error("Reconnection failed", zap.Error(err))
 				}
 			}
 		}
@@ -84,10 +82,10 @@ func (c *KafkaClient) reconnectWithBackoff(ctx context.Context, onReconnect func
 			float64(c.maxBackoff),
 		))
 
-		c.logger.WithFields(logrus.Fields{
-			"attempt": attempt + 1,
-			"backoff": backoff,
-		}).Info("Attempting reconnection")
+		c.logger.Info("Attempting reconnection",
+			zap.Any("attempt", attempt+1),
+			zap.Any("backoff", backoff),
+		)
 
 		// Wait before retry
 		select {
@@ -98,14 +96,14 @@ func (c *KafkaClient) reconnectWithBackoff(ctx context.Context, onReconnect func
 
 		// Try health check
 		if err := c.HealthCheck(ctx); err != nil {
-			c.logger.WithError(err).Warn("Reconnection attempt failed")
+			c.logger.Error("Reconnection attempt failed", zap.Error(err))
 			continue
 		}
 
 		// Call reconnect callback if provided
 		if onReconnect != nil {
 			if err := onReconnect(); err != nil {
-				c.logger.WithError(err).Warn("Reconnect callback failed")
+				c.logger.Error("Reconnect callback failed", zap.Error(err))
 				continue
 			}
 		}

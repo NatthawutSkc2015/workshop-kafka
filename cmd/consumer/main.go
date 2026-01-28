@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +12,8 @@ import (
 	"go-message/internal/kafka"
 	"go-message/internal/observability"
 	"go-message/internal/service"
+
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -18,8 +21,11 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize logger
-	observability.InitLogger(cfg.Logging.Level)
-	logger := observability.GetLogger()
+	logger, err := observability.NewLogger(cfg.Env)
+	if err != nil {
+		log.Printf("Error logger : %+v", err.Error())
+		return
+	}
 
 	logger.Info("Starting Kafka Consumer")
 
@@ -27,12 +33,12 @@ func main() {
 	metrics := observability.NewInMemoryMetrics()
 
 	// Create Kafka client for health checks
-	client := kafka.NewKafkaClient(cfg.Kafka.Brokers, 5)
+	client := kafka.NewKafkaClient(cfg.Kafka.Brokers, 5, logger)
 
 	// Verify connectivity
 	ctx := context.Background()
 	if err := client.HealthCheck(ctx); err != nil {
-		logger.WithError(err).Fatal("Failed to connect to Kafka")
+		logger.Error("Failed to connect to Kafka")
 	}
 	logger.Info("Successfully connected to Kafka")
 
@@ -45,6 +51,7 @@ func main() {
 		MaxRetries:  3,
 		BaseBackoff: 100 * time.Millisecond,
 		Metrics:     metrics,
+		Logger:      logger,
 	}
 	producer := kafka.NewProducer(producerCfg)
 	defer producer.Close()
@@ -62,13 +69,14 @@ func main() {
 		DLQTopic:         cfg.Consumer.DLQTopic,
 		Metrics:          metrics,
 		DedupeStore:      kafka.NewInMemoryDedupeStore(1 * time.Hour),
+		Logger:           logger,
 	}
 
 	consumer := kafka.NewConsumer(consumerCfg, producer)
 	defer consumer.Close()
 
 	// Create message processor
-	processor := service.NewMessageProcessor()
+	processor := service.NewMessageProcessor(logger)
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,13 +107,13 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				logger.WithFields(map[string]interface{}{
-					"received":    metrics.GetReceived(),
-					"processed":   metrics.GetProcessed(),
-					"failed":      metrics.GetFailed(),
-					"retried":     metrics.GetRetried(),
-					"sent_to_dlq": metrics.GetSentToDLQ(),
-				}).Info("Consumer metrics")
+				logger.Info("Consumer metrics",
+					zap.Any("received", metrics.GetReceived()),
+					zap.Any("processed", metrics.GetProcessed()),
+					zap.Any("failed", metrics.GetFailed()),
+					zap.Any("retried", metrics.GetRetried()),
+					zap.Any("sent_to_dlq", metrics.GetSentToDLQ()),
+				)
 			}
 		}
 	}()
@@ -113,17 +121,17 @@ func main() {
 	// Start consuming
 	logger.Info("Starting message consumption")
 	if err := consumer.Start(ctx, processor.Process); err != nil {
-		logger.WithError(err).Error("Consumer error")
+		logger.Error("Consumer error", zap.Error(err))
 	}
 
 	logger.Info("Consumer stopped")
 
 	// Print final metrics
-	logger.WithFields(map[string]interface{}{
-		"received":    metrics.GetReceived(),
-		"processed":   metrics.GetProcessed(),
-		"failed":      metrics.GetFailed(),
-		"retried":     metrics.GetRetried(),
-		"sent_to_dlq": metrics.GetSentToDLQ(),
-	}).Info("Final metrics")
+	logger.Info("Final metrics",
+		zap.Any("received", metrics.GetReceived()),
+		zap.Any("processed", metrics.GetProcessed()),
+		zap.Any("failed", metrics.GetFailed()),
+		zap.Any("retried", metrics.GetRetried()),
+		zap.Any("sent_to_dlq", metrics.GetSentToDLQ()),
+	)
 }

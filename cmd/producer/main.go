@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,8 @@ import (
 	"go-message/internal/kafka"
 	"go-message/internal/observability"
 	"go-message/pkg/models"
+
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -20,8 +23,11 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize logger
-	observability.InitLogger(cfg.Logging.Level)
-	logger := observability.GetLogger()
+	logger, err := observability.NewLogger(cfg.Env)
+	if err != nil {
+		log.Printf("Error logger : %+v", err.Error())
+		return
+	}
 
 	logger.Info("Starting Kafka Producer")
 
@@ -29,12 +35,12 @@ func main() {
 	metrics := observability.NewInMemoryMetrics()
 
 	// Create Kafka client for health checks
-	client := kafka.NewKafkaClient(cfg.Kafka.Brokers, 5)
+	client := kafka.NewKafkaClient(cfg.Kafka.Brokers, 5, logger)
 
 	// Verify connectivity
 	ctx := context.Background()
 	if err := client.HealthCheck(ctx); err != nil {
-		logger.WithError(err).Fatal("Failed to connect to Kafka")
+		logger.Error("Failed to connect to Kafka", zap.Error(err))
 	}
 	logger.Info("Successfully connected to Kafka")
 
@@ -47,6 +53,7 @@ func main() {
 		MaxRetries:  cfg.Producer.Retries,
 		BaseBackoff: 100 * time.Millisecond,
 		Metrics:     metrics,
+		Logger:      logger,
 	}
 
 	producer := kafka.NewProducer(producerCfg)
@@ -77,10 +84,10 @@ func main() {
 			logger.Info("Shutting down producer")
 
 			// Print metrics
-			logger.WithFields(map[string]interface{}{
-				"published": metrics.GetPublished(),
-				"failed":    metrics.GetPublishFailed(),
-			}).Info("Final metrics")
+			logger.Info("Final metrics",
+				zap.Any("", metrics.GetPublished()),
+				zap.Any("failed", metrics.GetPublishFailed()),
+			)
 
 			return
 
@@ -100,7 +107,7 @@ func main() {
 
 			value, err := json.Marshal(data)
 			if err != nil {
-				logger.WithError(err).Error("Failed to marshal message")
+				logger.Error("Failed to marshal message", zap.Error(err))
 				continue
 			}
 
@@ -117,20 +124,20 @@ func main() {
 			key := fmt.Sprintf("user-%d", messageCount)
 			err = producer.Publish(ctx, cfg.Producer.Topic, key, value, headers)
 			if err != nil {
-				logger.WithError(err).Error("Failed to publish message")
+				logger.Error("Failed to publish message", zap.Error(err))
 			} else {
-				logger.WithFields(map[string]interface{}{
-					"topic":      cfg.Producer.Topic,
-					"key":        key,
-					"message_id": messageID,
-				}).Info("Message published")
+				logger.Info("Message published",
+					zap.Any("topic", cfg.Producer.Topic),
+					zap.Any("key", key),
+					zap.Any("message_id", messageID),
+				)
 			}
 
 			// Print current metrics
-			logger.WithFields(map[string]interface{}{
-				"published": metrics.GetPublished(),
-				"failed":    metrics.GetPublishFailed(),
-			}).Debug("Current metrics")
+			logger.Debug("Message published",
+				zap.Any("published", metrics.GetPublished()),
+				zap.Any("failed", metrics.GetPublishFailed()),
+			)
 		}
 	}
 }

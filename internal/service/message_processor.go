@@ -5,29 +5,28 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"go-message/internal/observability"
 	"go-message/pkg/models"
 
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 // MessageProcessor handles business logic for processing messages
 type MessageProcessor struct {
-	logger *logrus.Logger
+	logger *zap.Logger
 }
 
-func NewMessageProcessor() *MessageProcessor {
+func NewMessageProcessor(logger *zap.Logger) *MessageProcessor {
 	return &MessageProcessor{
-		logger: observability.GetLogger(),
+		logger: logger,
 	}
 }
 
 // Process handles the business logic for a consumed message
 func (p *MessageProcessor) Process(ctx context.Context, msg *models.Message) error {
-	p.logger.WithFields(logrus.Fields{
-		"key":        msg.Key,
-		"message_id": msg.Headers[models.HeaderMessageID],
-	}).Info("Processing message")
+	p.logger.Info("Processing message",
+		zap.String("key", msg.Key),
+		zap.String("message_id", msg.Headers[models.HeaderMessageID]),
+	)
 
 	// Example: Parse message value as JSON
 	var data map[string]interface{}
@@ -42,11 +41,10 @@ func (p *MessageProcessor) Process(ctx context.Context, msg *models.Message) err
 	// - Call external APIs
 	// - Transform data
 	// - etc.
-
-	p.logger.WithFields(logrus.Fields{
-		"key":  msg.Key,
-		"data": data,
-	}).Debug("Message processed successfully")
+	p.logger.Debug("Message processed successfully",
+		zap.Any("key", msg.Key),
+		zap.Any("data", data),
+	)
 
 	return nil
 }
